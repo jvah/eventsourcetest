@@ -50,52 +50,49 @@ function sendEvents(res, lastEventId, values) {
 
 app.get('/events/game/:id', function(req, res) {
   req.socket.setTimeout(Infinity);
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive'
+  });
+  res.write('\n');
 
   var lastEventId = 0;
   var gameId = parseInt(req.params.id);
   var eventKey = 'events:game:'+gameId;
-  
-  db.lrange(eventKey, 0, -1, function(err, values) {
-    if (err) {
-      res.status(500).json({error: err.toString()});
-      return;
-    }
 
-    // Write all initial events to the client
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive'
-    });
-    res.write('\n');
-    lastEventId = sendEvents(res, lastEventId, values);
+  var subscriber = redis.createClient();
+  subscriber.once('error', function(err) {
+    subscriber.end();
+    subscriber = null;
+    res.end();
+  });
 
-    // Create a subscriber client and handle error
-    var subscriber = redis.createClient();
-    subscriber.on('error', function(err) {
-      subscriber.end();
-      res.end();
-    });
-
-    // Handle new messages in event array
-    subscriber.on('message', function(ch, msg) {
-      if (ch !== eventKey) {
+  subscriber.subscribe(eventKey, function(channel, count) {
+    db.lrange(eventKey, lastEventId, -1, function(err, values) {
+      if (!subscriber) {
+        // This connection is not relevant any more
         return;
       }
-      db.lrange(eventKey, lastEventId, -1, function(err, values) {
-        if (err) {
-          console.log(err);
+      if (err) {
+        // Error in subscription, propagate
+        subscriber.emit('error', err);
+        return;
+      }
+      lastEventId = sendEvents(res, lastEventId, values);
+      subscriber.on('message', function(channel, value) {
+        if (channel !== eventKey) {
           return;
         }
-        lastEventId = sendEvents(res, lastEventId, values);
+        lastEventId = sendEvents(res, lastEventId, [value]);
       });
-
     });
-    req.on('close', function() {
+  });
+  req.on('close', function() {
+    if (subscriber) {
       subscriber.unsubscribe();
       subscriber.quit();
-    });
-    subscriber.subscribe(eventKey);
+    }
   });
 });
 
