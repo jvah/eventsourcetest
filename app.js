@@ -67,7 +67,7 @@ app.get('/events/game/:id', function(req, res) {
     }
 
     var lastEventId = parseInt(req.get('Last-Event-ID'), 10);
-    if (isNaN(lastEventId) || lastEventId > maxEventId) {
+    if (isNaN(lastEventId) || lastEventId < 0 || lastEventId > maxEventId) {
       // Not a valid Last-Event-ID value
       lastEventId = 0;
     }
