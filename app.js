@@ -19,7 +19,7 @@ app.get('/', function(req, res) {
 });
 
 app.post('/events/game/:id', function(req, res) {
-  var gameId = parseInt(req.params.id);
+  var gameId = req.params.id;
   var msg = JSON.stringify(req.body);
 
   var multi = db.multi();
@@ -57,8 +57,12 @@ app.get('/events/game/:id', function(req, res) {
   });
   res.write('\n');
 
-  var lastEventId = 0;
-  var gameId = parseInt(req.params.id);
+  var lastEventId = parseInt(req.get('Last-Event-ID'), 10);
+  if (isNaN(lastEventId)) {
+    // Not a valid number
+    lastEventId = 0;
+  }
+  var gameId = req.params.id;
   var eventKey = 'events:game:'+gameId;
 
   var subscriber = redis.createClient();
