@@ -57,46 +57,54 @@ app.get('/events/game/:id', function(req, res) {
   });
   res.write('\n');
 
-  var lastEventId = parseInt(req.get('Last-Event-ID'), 10);
-  if (isNaN(lastEventId)) {
-    // Not a valid number
-    lastEventId = 0;
-  }
   var gameId = req.params.id;
   var eventKey = 'events:game:'+gameId;
 
-  var subscriber = redis.createClient();
-  subscriber.once('error', function(err) {
-    subscriber.end();
-    subscriber = null;
-    res.end();
-  });
+  db.llen(eventKey, function(err, maxEventId) {
+    if (err) {
+      res.end();
+      return;
+    }
 
-  subscriber.subscribe(eventKey, function(channel, count) {
-    db.lrange(eventKey, lastEventId, -1, function(err, values) {
-      if (!subscriber) {
-        // This connection is not relevant any more
-        return;
-      }
-      if (err) {
-        // Error in subscription, propagate
-        subscriber.emit('error', err);
-        return;
-      }
-      lastEventId = sendEvents(res, lastEventId, values);
-      subscriber.on('message', function(channel, value) {
-        if (channel !== eventKey) {
+    var lastEventId = parseInt(req.get('Last-Event-ID'), 10);
+    if (isNaN(lastEventId) || lastEventId > maxEventId) {
+      // Not a valid Last-Event-ID value
+      lastEventId = 0;
+    }
+
+    var subscriber = redis.createClient();
+    subscriber.once('error', function(err) {
+      subscriber.end();
+      subscriber = null;
+      res.end();
+    });
+
+    subscriber.subscribe(eventKey, function(channel, count) {
+      db.lrange(eventKey, lastEventId, -1, function(err, values) {
+        if (!subscriber) {
+          // This connection is not relevant any more
           return;
         }
-        lastEventId = sendEvents(res, lastEventId, [value]);
+        if (err) {
+          // Error in subscription, propagate
+          subscriber.emit('error', err);
+          return;
+        }
+        lastEventId = sendEvents(res, lastEventId, values);
+        subscriber.on('message', function(channel, value) {
+          if (channel !== eventKey) {
+            return;
+          }
+          lastEventId = sendEvents(res, lastEventId, [value]);
+        });
       });
     });
-  });
-  req.on('close', function() {
-    if (subscriber) {
-      subscriber.unsubscribe();
-      subscriber.quit();
-    }
+    req.on('close', function() {
+      if (subscriber) {
+        subscriber.unsubscribe();
+        subscriber.quit();
+      }
+    });
   });
 });
 
