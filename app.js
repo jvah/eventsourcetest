@@ -5,14 +5,52 @@ var bodyParser = require('body-parser');
 
 var db = redis.createClient();
 db.on('ready', function() {
-  console.log('Redis connection ready');
+  console.log('Database connection ready');
 });
 db.on('error', function(err) {
-  console.log('Error in redis: '+err);
+  console.log('Database error: '+err);
 });
+
+var subs = {};
+
+var sub = redis.createClient();
+sub.setMaxListeners(10000);
+sub.on('ready', function() {
+  console.log('Subscriber connection ready');
+});
+sub.on('error', function(err) {
+  console.log('Subscriber error: '+err);
+  Object.keys(subs).forEach(function(eventKey) {
+    sub.removeAllListeners(eventKey);
+  });
+  subs = {};
+});
+
+function subscribe(eventKey, cb) {
+  if (subs[eventKey] === undefined) {
+    subs[eventKey] = 1;
+    sub.subscribe(eventKey, cb);
+  } else {
+    subs[eventKey] += 1;
+    if (cb) cb(null, eventKey);
+  }
+}
+
+function unsubscribe(eventKey, cb) {
+  if (subs[eventKey] === 1) {
+    delete subs[eventKey];
+    sub.unsubscribe(eventKey, cb);
+  } else {
+    if (subs[eventKey] > 1) {
+      subs[eventKey] -= 1;
+    }
+    if (cb) cb(null, eventKey);
+  }
+}
 
 var app = express();
 app.use(bodyParser.json());
+app.disable('x-powered-by');
 
 app.get('/', function(req, res) {
   res.send('Hello World!');
@@ -20,18 +58,19 @@ app.get('/', function(req, res) {
 
 app.post('/events/game/:id', function(req, res) {
   var gameId = req.params.id;
-  var msg = JSON.stringify(req.body);
+  var eventKey = 'events:game:'+gameId;
 
-  var multi = db.multi();
-  multi = multi.rpush('events:game:'+gameId, msg);
-  multi = multi.publish('events:game:'+gameId, msg);
-  multi.exec(function(err, replies) {
-    if (err) {
-      res.status(500).json({error: err.toString()});
-    } else {
-      res.send();
-    }
-  });
+  var msg = JSON.stringify(req.body);
+  db.multi()
+    .rpush(eventKey, msg)
+    .publish(eventKey, msg)
+    .exec(function(err, replies) {
+      if (err) {
+        res.status(500).json({error: err.toString()});
+      } else {
+        res.send();
+      }
+    });
 });
 
 function sendEvents(res, lastEventId, values) {
@@ -61,10 +100,7 @@ app.get('/events/game/:id', function(req, res) {
   var eventKey = 'events:game:'+gameId;
 
   db.llen(eventKey, function(err, maxEventId) {
-    if (err) {
-      res.end();
-      return;
-    }
+    if (err) return res.end();
 
     var lastEventId = parseInt(req.get('Last-Event-ID'), 10);
     if (isNaN(lastEventId) || lastEventId < 0 || lastEventId > maxEventId) {
@@ -72,38 +108,34 @@ app.get('/events/game/:id', function(req, res) {
       lastEventId = 0;
     }
 
-    var subscriber = redis.createClient();
-    subscriber.once('error', function(err) {
-      subscriber.end();
-      subscriber = null;
+    function errorHandler(err) {
+      // Message handlers already cleaned up
       res.end();
-    });
+    }
+    function messageHandler(channel, msg) {
+      if (channel !== eventKey) return;
+      lastEventId = sendEvents(res, lastEventId, [msg]);
+    }
 
-    subscriber.subscribe(eventKey, function(channel, count) {
+    subscribe(eventKey, function(err, channel) {
+      console.log('Subscribed to channel '+channel);
       db.lrange(eventKey, lastEventId, -1, function(err, values) {
-        if (!subscriber) {
-          // This connection is not relevant any more
-          return;
-        }
         if (err) {
-          // Error in subscription, propagate
-          subscriber.emit('error', err);
-          return;
+          // Error in database, end connection
+          unsubscribe(eventKey);
+          res.end();
+        } else {
+          lastEventId = sendEvents(res, lastEventId, values);
+          sub.on('message', messageHandler);
         }
-        lastEventId = sendEvents(res, lastEventId, values);
-        subscriber.on('message', function(channel, value) {
-          if (channel !== eventKey) {
-            return;
-          }
-          lastEventId = sendEvents(res, lastEventId, [value]);
-        });
       });
     });
+
+    sub.once('error', errorHandler);
     req.on('close', function() {
-      if (subscriber) {
-        subscriber.unsubscribe();
-        subscriber.quit();
-      }
+      sub.removeListener('error', errorHandler);
+      sub.removeListener('message', messageHandler);
+      unsubscribe(eventKey);
     });
   });
 });
