@@ -66,6 +66,15 @@ app.get('/', function(req, res) {
   res.send('Hello World!');
 });
 
+app.get('/events/game/', function(req, res) {
+  db.keys('events:game:*', function(err, keys) {
+    var ids = keys.map(function(key) {
+      return key.substring('events:game:'.length);
+    });
+    res.json(ids);
+  });
+});
+
 app.post('/events/game/:id', function(req, res) {
   var gameId = req.params.id;
   var eventKey = 'events:game:'+gameId;
