@@ -14,9 +14,10 @@ db.on('error', function(err) {
 
 var subs = {};
 var emitter = new EventEmitter();
+emitter.setMaxListeners(Infinity);
 
 var sub = redis.createClient();
-sub.setMaxListeners(10000);
+sub.setMaxListeners(Infinity);
 sub.on('ready', function() {
   console.log('Subscriber connection ready');
 });
